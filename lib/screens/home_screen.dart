@@ -31,7 +31,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _uploadPhoto() async {
     setState(() => _uploading = true);
     try {
-      await _photoService.pickCompressAndUpload(widget.group.id);
+      await _photoService.pickCompressAndUpload(context, widget.group.id);
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(

@@ -6,12 +6,13 @@ import 'dart:ui' as ui;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:exif/exif.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_gallery_saver_plus/image_gallery_saver_plus.dart';
-import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:uuid/uuid.dart';
+import 'package:wechat_assets_picker/wechat_assets_picker.dart';
 
 import '../models/photo_post.dart';
 
@@ -20,12 +21,10 @@ class PhotoService {
     FirebaseAuth? auth,
     FirebaseFirestore? firestore,
     http.Client? httpClient,
-    ImagePicker? imagePicker,
     Uuid? uuid,
   })  : _auth = auth ?? FirebaseAuth.instance,
         _firestore = firestore ?? FirebaseFirestore.instance,
         _httpClient = httpClient ?? http.Client(),
-        _imagePicker = imagePicker ?? ImagePicker(),
         _uuid = uuid ?? const Uuid();
 
   static const _cloudName = String.fromEnvironment('CLOUDINARY_CLOUD_NAME');
@@ -35,7 +34,6 @@ class PhotoService {
   final FirebaseAuth _auth;
   final FirebaseFirestore _firestore;
   final http.Client _httpClient;
-  final ImagePicker _imagePicker;
   final Uuid _uuid;
 
   Stream<List<PhotoPost>> watchGroupPosts(String groupId) {
@@ -50,27 +48,65 @@ class PhotoService {
         );
   }
 
-  Future<void> pickCompressAndUpload(String groupId) async {
+  Future<void> pickCompressAndUpload(
+    BuildContext context,
+    String groupId,
+  ) async {
     final user = _auth.currentUser;
     if (user == null) {
       throw StateError('User must be signed in.');
     }
 
-    final picked = await _imagePicker.pickImage(source: ImageSource.gallery);
-    if (picked == null) return;
+    final permission = await PhotoManager.requestPermissionExtend(
+      requestOption: const PermissionRequestOption(
+        androidPermission: AndroidPermission(
+          type: RequestType.image,
+          mediaLocation: true,
+        ),
+      ),
+    );
+    if (!permission.hasAccess) {
+      throw StateError('Allow photo access to upload images.');
+    }
+    if (!context.mounted) return;
 
-    final sourceFile = File(picked.path);
+    final List<AssetEntity>? picked;
+    try {
+      picked = await AssetPicker.pickAssets(
+        context,
+        pickerConfig: const AssetPickerConfig(
+          maxAssets: 1,
+          requestType: RequestType.image,
+        ),
+      );
+    } on StateError catch (error) {
+      throw StateError('Could not open gallery permissions: ${error.message}');
+    }
+    if (picked == null || picked.isEmpty) return;
+
+    final asset = picked.first;
+    final file = await asset.file;
+    if (file == null) {
+      throw StateError('Could not open the selected image.');
+    }
+
+    final filename = _safeFilename(
+      asset.title ?? p.basename(file.path),
+      file.path,
+    );
+    final sourceFile = file;
     final originalBytes = await sourceFile.readAsBytes();
     final takenOn = await _readOriginalTakenDate(
       bytes: originalBytes,
-      fallback: picked,
+      fallbackFile: sourceFile,
+      mediaStoreDate: asset.createDateTime,
     );
     final compressed = await _compressImage(sourceFile);
     final dimensions = await _readImageDimensions(compressed);
     final postId = _uuid.v4();
     final upload = await _uploadToCloudinary(
       bytes: compressed,
-      filename: _safeFilename(picked.name, sourceFile.path),
+      filename: filename,
     );
 
     await _firestore.collection('posts').doc(postId).set({
@@ -83,7 +119,7 @@ class PhotoService {
       'cloudinaryPublicId': upload.publicId,
       if (upload.deleteToken != null)
         'cloudinaryDeleteToken': upload.deleteToken,
-      'originalFileName': _safeFilename(picked.name, sourceFile.path),
+      'originalFileName': filename,
       'fileSizeBytes': compressed.length,
       'width': dimensions.width,
       'height': dimensions.height,
@@ -226,8 +262,12 @@ class PhotoService {
 
   Future<DateTime> _readOriginalTakenDate({
     required Uint8List bytes,
-    required XFile fallback,
+    required File fallbackFile,
+    required DateTime mediaStoreDate,
   }) async {
+    final normalizedMediaDate = _normalizeDate(mediaStoreDate);
+    if (normalizedMediaDate != null) return normalizedMediaDate;
+
     try {
       final exif = await readExifFromBytes(bytes);
       final rawDate = exif['EXIF DateTimeOriginal']?.printable ??
@@ -239,7 +279,13 @@ class PhotoService {
       // Some edited/downloaded images do not contain readable EXIF metadata.
     }
 
-    return _safeLastModified(fallback);
+    return _safeLastModified(fallbackFile);
+  }
+
+  DateTime? _normalizeDate(DateTime date) {
+    if (date.millisecondsSinceEpoch <= 0) return null;
+    if (date.year < 1971) return null;
+    return date;
   }
 
   DateTime? _parseExifDate(String? value) {
@@ -265,7 +311,7 @@ class PhotoService {
     );
   }
 
-  Future<DateTime> _safeLastModified(XFile file) async {
+  Future<DateTime> _safeLastModified(File file) async {
     try {
       return await file.lastModified();
     } catch (_) {
