@@ -6,13 +6,20 @@ import '../models/photo_post.dart';
 import '../screens/photo_preview_screen.dart';
 
 class PhotoTile extends StatelessWidget {
-  const PhotoTile({required this.post, super.key});
+  const PhotoTile({
+    required this.post,
+    required this.dateLabel,
+    required this.displayDate,
+    super.key,
+  });
 
   final PhotoPost post;
+  final String dateLabel;
+  final DateTime displayDate;
 
   @override
   Widget build(BuildContext context) {
-    final timestamp = DateFormat('MMM d, yyyy h:mm a').format(post.uploadedAt);
+    final timestamp = DateFormat('MMM d, yyyy h:mm a').format(displayDate);
 
     return ClipRRect(
       borderRadius: BorderRadius.circular(8),
@@ -54,7 +61,7 @@ class PhotoTile extends StatelessWidget {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      timestamp,
+                      '$dateLabel: $timestamp',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall,

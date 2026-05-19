@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:exif/exif.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:http/http.dart' as http;
@@ -59,9 +60,13 @@ class PhotoService {
     if (picked == null) return;
 
     final sourceFile = File(picked.path);
+    final originalBytes = await sourceFile.readAsBytes();
+    final takenOn = await _readOriginalTakenDate(
+      bytes: originalBytes,
+      fallback: picked,
+    );
     final compressed = await _compressImage(sourceFile);
     final dimensions = await _readImageDimensions(compressed);
-    final takenOn = await _safeLastModified(picked);
     final postId = _uuid.v4();
     final upload = await _uploadToCloudinary(
       bytes: compressed,
@@ -217,6 +222,47 @@ class PhotoService {
     image.dispose();
     codec.dispose();
     return dimensions;
+  }
+
+  Future<DateTime> _readOriginalTakenDate({
+    required Uint8List bytes,
+    required XFile fallback,
+  }) async {
+    try {
+      final exif = await readExifFromBytes(bytes);
+      final rawDate = exif['EXIF DateTimeOriginal']?.printable ??
+          exif['EXIF DateTimeDigitized']?.printable ??
+          exif['Image DateTime']?.printable;
+      final parsed = _parseExifDate(rawDate);
+      if (parsed != null) return parsed;
+    } catch (_) {
+      // Some edited/downloaded images do not contain readable EXIF metadata.
+    }
+
+    return _safeLastModified(fallback);
+  }
+
+  DateTime? _parseExifDate(String? value) {
+    if (value == null || value.trim().isEmpty) return null;
+    final match = RegExp(
+      r'^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})',
+    ).firstMatch(value.trim());
+    if (match == null) return null;
+
+    final parts = List.generate(
+      6,
+      (index) => int.tryParse(match.group(index + 1) ?? ''),
+    );
+    if (parts.any((part) => part == null)) return null;
+
+    return DateTime(
+      parts[0]!,
+      parts[1]!,
+      parts[2]!,
+      parts[3]!,
+      parts[4]!,
+      parts[5]!,
+    );
   }
 
   Future<DateTime> _safeLastModified(XFile file) async {

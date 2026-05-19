@@ -7,6 +7,10 @@ import '../services/photo_service.dart';
 import 'members_screen.dart';
 import '../widgets/photo_tile.dart';
 
+enum PhotoSortField { uploadedAt, takenOn }
+
+enum PhotoSortDirection { descending, ascending }
+
 class HomeScreen extends StatefulWidget {
   const HomeScreen({required this.group, super.key});
 
@@ -21,6 +25,8 @@ class _HomeScreenState extends State<HomeScreen> {
   final _photoService = PhotoService();
 
   bool _uploading = false;
+  PhotoSortField _sortField = PhotoSortField.uploadedAt;
+  PhotoSortDirection _sortDirection = PhotoSortDirection.descending;
 
   Future<void> _uploadPhoto() async {
     setState(() => _uploading = true);
@@ -34,6 +40,34 @@ class _HomeScreenState extends State<HomeScreen> {
     } finally {
       if (mounted) setState(() => _uploading = false);
     }
+  }
+
+  List<PhotoPost> _sortPosts(List<PhotoPost> posts) {
+    final sorted = List<PhotoPost>.from(posts);
+    sorted.sort((a, b) {
+      final aDate = _sortDate(a);
+      final bDate = _sortDate(b);
+      final comparison = aDate.compareTo(bDate);
+      if (comparison == 0) {
+        return a.uploadedAt.compareTo(b.uploadedAt);
+      }
+      return comparison;
+    });
+
+    if (_sortDirection == PhotoSortDirection.descending) {
+      return sorted.reversed.toList(growable: false);
+    }
+    return sorted;
+  }
+
+  DateTime _sortDate(PhotoPost post) {
+    return _sortField == PhotoSortField.uploadedAt
+        ? post.uploadedAt
+        : post.takenOn ?? post.uploadedAt;
+  }
+
+  String get _dateLabel {
+    return _sortField == PhotoSortField.uploadedAt ? 'Uploaded' : 'Taken';
   }
 
   @override
@@ -90,18 +124,42 @@ class _HomeScreenState extends State<HomeScreen> {
             );
           }
 
+          final sortedPosts = _sortPosts(posts);
           return RefreshIndicator(
             onRefresh: () async {},
-            child: GridView.builder(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 96),
-              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                crossAxisCount: 2,
-                crossAxisSpacing: 10,
-                mainAxisSpacing: 10,
-                childAspectRatio: 0.76,
-              ),
-              itemCount: posts.length,
-              itemBuilder: (context, index) => PhotoTile(post: posts[index]),
+            child: CustomScrollView(
+              slivers: [
+                SliverToBoxAdapter(
+                  child: _SortControls(
+                    sortField: _sortField,
+                    sortDirection: _sortDirection,
+                    onSortFieldChanged: (field) {
+                      setState(() => _sortField = field);
+                    },
+                    onSortDirectionChanged: (direction) {
+                      setState(() => _sortDirection = direction);
+                    },
+                  ),
+                ),
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 96),
+                  sliver: SliverGrid.builder(
+                    gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: 2,
+                      crossAxisSpacing: 10,
+                      mainAxisSpacing: 10,
+                      childAspectRatio: 0.76,
+                    ),
+                    itemCount: sortedPosts.length,
+                    itemBuilder: (context, index) => PhotoTile(
+                      post: sortedPosts[index],
+                      dateLabel: _dateLabel,
+                      displayDate: _sortDate(sortedPosts[index]),
+                    ),
+                  ),
+                ),
+              ],
             ),
           );
         },
@@ -115,6 +173,70 @@ class _HomeScreenState extends State<HomeScreen> {
               )
             : const Icon(Icons.photo_library_outlined),
         label: Text(_uploading ? 'Uploading' : 'Upload'),
+      ),
+    );
+  }
+}
+
+class _SortControls extends StatelessWidget {
+  const _SortControls({
+    required this.sortField,
+    required this.sortDirection,
+    required this.onSortFieldChanged,
+    required this.onSortDirectionChanged,
+  });
+
+  final PhotoSortField sortField;
+  final PhotoSortDirection sortDirection;
+  final ValueChanged<PhotoSortField> onSortFieldChanged;
+  final ValueChanged<PhotoSortDirection> onSortDirectionChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 10),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        alignment: WrapAlignment.spaceBetween,
+        children: [
+          SegmentedButton<PhotoSortField>(
+            segments: const [
+              ButtonSegment(
+                value: PhotoSortField.uploadedAt,
+                label: Text('Upload date'),
+                icon: Icon(Icons.cloud_upload_outlined),
+              ),
+              ButtonSegment(
+                value: PhotoSortField.takenOn,
+                label: Text('Taken on'),
+                icon: Icon(Icons.photo_camera_back_outlined),
+              ),
+            ],
+            selected: {sortField},
+            onSelectionChanged: (selection) {
+              onSortFieldChanged(selection.first);
+            },
+          ),
+          SegmentedButton<PhotoSortDirection>(
+            segments: const [
+              ButtonSegment(
+                value: PhotoSortDirection.descending,
+                label: Text('Desc'),
+                icon: Icon(Icons.south),
+              ),
+              ButtonSegment(
+                value: PhotoSortDirection.ascending,
+                label: Text('Asc'),
+                icon: Icon(Icons.north),
+              ),
+            ],
+            selected: {sortDirection},
+            onSelectionChanged: (selection) {
+              onSortDirectionChanged(selection.first);
+            },
+          ),
+        ],
       ),
     );
   }
