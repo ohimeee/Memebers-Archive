@@ -95,7 +95,12 @@ class GroupService {
           SetOptions(merge: true));
     });
 
-    return Group(id: groupId, name: name.trim(), inviteCode: inviteCode);
+    return Group(
+      id: groupId,
+      name: name.trim(),
+      inviteCode: inviteCode,
+      createdBy: user.uid,
+    );
   }
 
   Future<Group> joinGroup(String inviteCodeOrGroupId) async {
@@ -146,9 +151,43 @@ class GroupService {
     return Group.fromSnapshot(groupDoc);
   }
 
+  Future<LeaveGroupResult> leaveGroup(Group group) async {
+    final user = _user;
+    final groupRef = _firestore.collection('groups').doc(group.id);
+    final memberRef = groupRef.collection('members').doc(user.uid);
+    final userRef = _firestore.collection('users').doc(user.uid);
+    final membersSnapshot = await groupRef.collection('members').limit(2).get();
+    final shouldDeleteGroup =
+        membersSnapshot.docs.length <= 1 && group.createdBy == user.uid;
+
+    await _firestore.runTransaction((transaction) async {
+      transaction.delete(memberRef);
+      transaction.set(
+        userRef,
+        {
+          'currentGroupId': FieldValue.delete(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+
+      if (shouldDeleteGroup) {
+        transaction.delete(groupRef);
+      }
+    });
+
+    return LeaveGroupResult(deletedGroup: shouldDeleteGroup);
+  }
+
   String _generateInviteCode() {
     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     final random = Random.secure();
     return List.generate(6, (_) => chars[random.nextInt(chars.length)]).join();
   }
+}
+
+class LeaveGroupResult {
+  const LeaveGroupResult({required this.deletedGroup});
+
+  final bool deletedGroup;
 }

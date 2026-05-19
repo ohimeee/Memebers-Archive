@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 
 import '../models/group.dart';
 import '../models/photo_post.dart';
 import '../services/auth_service.dart';
+import '../services/group_service.dart';
 import '../services/photo_service.dart';
 import 'members_screen.dart';
 import 'photo_preview_screen.dart';
@@ -11,6 +13,8 @@ import '../widgets/photo_tile.dart';
 enum PhotoSortField { uploadedAt, takenOn }
 
 enum PhotoSortDirection { descending, ascending }
+
+enum _HomeAction { leaveGroup }
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({required this.group, super.key});
@@ -23,10 +27,12 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   final _authService = AuthService();
+  final _groupService = GroupService();
   final _photoService = PhotoService();
 
   bool _uploading = false;
   bool _deletingSelection = false;
+  bool _leavingGroup = false;
   PhotoSortField _sortField = PhotoSortField.uploadedAt;
   PhotoSortDirection _sortDirection = PhotoSortDirection.descending;
   final Set<String> _selectedPostIds = {};
@@ -138,6 +144,53 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
+  Future<void> _confirmLeaveGroup() async {
+    final isOwner = widget.group.createdBy == _authService.currentUser?.uid;
+    final title = isOwner ? 'Leave this group?' : 'Leave group?';
+    final shouldLeave = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(title),
+        content: Text(
+          isOwner
+              ? 'If you are the only member, this empty group will be deleted. Your uploaded photos remain unless you delete them first.'
+              : 'You will lose access to this shared gallery. Your uploaded photos remain unless you delete them first.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Leave'),
+          ),
+        ],
+      ),
+    );
+    if (shouldLeave != true) return;
+
+    setState(() => _leavingGroup = true);
+    try {
+      final result = await _groupService.leaveGroup(widget.group);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.deletedGroup ? 'Empty group deleted.' : 'Left group.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.toString())),
+      );
+    } finally {
+      if (mounted) setState(() => _leavingGroup = false);
+    }
+  }
+
   List<PhotoPost> _sortPosts(List<PhotoPost> posts) {
     final sorted = List<PhotoPost>.from(posts);
     sorted.sort((a, b) {
@@ -160,6 +213,44 @@ class _HomeScreenState extends State<HomeScreen> {
     return _sortField == PhotoSortField.uploadedAt
         ? post.uploadedAt
         : post.takenOn ?? post.uploadedAt;
+  }
+
+  List<_MonthSection> _monthSections(List<PhotoPost> posts) {
+    final sections = <_MonthSection>[];
+    for (final post in posts) {
+      final date = _sortDate(post);
+      final month = DateTime(date.year, date.month);
+      if (sections.isEmpty || sections.last.month != month) {
+        sections.add(_MonthSection(month: month, posts: [post]));
+      } else {
+        sections.last.posts.add(post);
+      }
+    }
+    return sections;
+  }
+
+  Widget _buildPhotoTile(PhotoPost post) {
+    final canSelect = _photoService.canCurrentUserDelete(post);
+    return PhotoTile(
+      post: post,
+      dateLabel: _dateLabel,
+      displayDate: _sortDate(post),
+      selectionMode: _selectionMode,
+      selected: _selectedPostIds.contains(post.id),
+      canSelect: canSelect,
+      onTap: () {
+        if (_selectionMode) {
+          _toggleSelection(post);
+        } else {
+          _openPreview(post);
+        }
+      },
+      onLongPress: () => _toggleSelection(post),
+    );
+  }
+
+  String _monthLabel(DateTime month) {
+    return DateFormat('MMM yyyy').format(month);
   }
 
   String get _dateLabel {
@@ -210,18 +301,39 @@ class _HomeScreenState extends State<HomeScreen> {
           else ...[
             IconButton(
               tooltip: 'Members',
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (_) => MembersScreen(group: widget.group),
-                  ),
-                );
-              },
+              onPressed: _leavingGroup
+                  ? null
+                  : () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => MembersScreen(group: widget.group),
+                        ),
+                      );
+                    },
               icon: const Icon(Icons.group_outlined),
+            ),
+            PopupMenuButton<_HomeAction>(
+              enabled: !_leavingGroup,
+              onSelected: (action) {
+                switch (action) {
+                  case _HomeAction.leaveGroup:
+                    _confirmLeaveGroup();
+                }
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(
+                  value: _HomeAction.leaveGroup,
+                  child: ListTile(
+                    leading: Icon(Icons.exit_to_app),
+                    title: Text('Leave group'),
+                    contentPadding: EdgeInsets.zero,
+                  ),
+                ),
+              ],
             ),
             IconButton(
               tooltip: 'Sign out',
-              onPressed: _authService.signOut,
+              onPressed: _leavingGroup ? null : _authService.signOut,
               icon: const Icon(Icons.logout),
             ),
           ],
@@ -250,6 +362,7 @@ class _HomeScreenState extends State<HomeScreen> {
           }
 
           final sortedPosts = _sortPosts(posts);
+          final monthSections = _monthSections(sortedPosts);
           return RefreshIndicator(
             onRefresh: () async {},
             child: CustomScrollView(
@@ -266,40 +379,50 @@ class _HomeScreenState extends State<HomeScreen> {
                     },
                   ),
                 ),
-                SliverPadding(
-                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 96),
-                  sliver: SliverGrid.builder(
-                    gridDelegate:
-                        const SliverGridDelegateWithFixedCrossAxisCount(
-                      crossAxisCount: 2,
-                      crossAxisSpacing: 10,
-                      mainAxisSpacing: 10,
-                      childAspectRatio: 0.76,
+                for (var sectionIndex = 0;
+                    sectionIndex < monthSections.length;
+                    sectionIndex++) ...[
+                  SliverToBoxAdapter(
+                    child: Padding(
+                      padding: EdgeInsets.fromLTRB(
+                        16,
+                        sectionIndex == 0 ? 4 : 22,
+                        16,
+                        10,
+                      ),
+                      child: Text(
+                        _monthLabel(monthSections[sectionIndex].month),
+                        style: Theme.of(context)
+                            .textTheme
+                            .titleLarge
+                            ?.copyWith(fontWeight: FontWeight.w700),
+                      ),
                     ),
-                    itemCount: sortedPosts.length,
-                    itemBuilder: (context, index) {
-                      final post = sortedPosts[index];
-                      final canSelect =
-                          _photoService.canCurrentUserDelete(post);
-                      return PhotoTile(
-                        post: post,
-                        dateLabel: _dateLabel,
-                        displayDate: _sortDate(post),
-                        selectionMode: _selectionMode,
-                        selected: _selectedPostIds.contains(post.id),
-                        canSelect: canSelect,
-                        onTap: () {
-                          if (_selectionMode) {
-                            _toggleSelection(post);
-                          } else {
-                            _openPreview(post);
-                          }
-                        },
-                        onLongPress: () => _toggleSelection(post),
-                      );
-                    },
                   ),
-                ),
+                  SliverPadding(
+                    padding: EdgeInsets.fromLTRB(
+                      12,
+                      0,
+                      12,
+                      sectionIndex == monthSections.length - 1 ? 96 : 0,
+                    ),
+                    sliver: SliverGrid.builder(
+                      gridDelegate:
+                          const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 2,
+                        crossAxisSpacing: 10,
+                        mainAxisSpacing: 10,
+                        childAspectRatio: 0.76,
+                      ),
+                      itemCount: monthSections[sectionIndex].posts.length,
+                      itemBuilder: (context, index) {
+                        return _buildPhotoTile(
+                          monthSections[sectionIndex].posts[index],
+                        );
+                      },
+                    ),
+                  ),
+                ],
               ],
             ),
           );
@@ -317,6 +440,16 @@ class _HomeScreenState extends State<HomeScreen> {
       ),
     );
   }
+}
+
+class _MonthSection {
+  _MonthSection({
+    required this.month,
+    required this.posts,
+  });
+
+  final DateTime month;
+  final List<PhotoPost> posts;
 }
 
 class _SortControls extends StatelessWidget {
