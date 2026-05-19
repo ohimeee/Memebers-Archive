@@ -30,6 +30,8 @@ class PhotoService {
   static const _cloudName = String.fromEnvironment('CLOUDINARY_CLOUD_NAME');
   static const _uploadPreset =
       String.fromEnvironment('CLOUDINARY_UPLOAD_PRESET');
+  static const _deleteEndpoint =
+      String.fromEnvironment('CLOUDINARY_DELETE_ENDPOINT');
 
   final FirebaseAuth _auth;
   final FirebaseFirestore _firestore;
@@ -48,7 +50,7 @@ class PhotoService {
         );
   }
 
-  Future<void> pickCompressAndUpload(
+  Future<int> pickCompressAndUpload(
     BuildContext context,
     String groupId,
   ) async {
@@ -68,23 +70,36 @@ class PhotoService {
     if (!permission.hasAccess) {
       throw StateError('Allow photo access to upload images.');
     }
-    if (!context.mounted) return;
+    if (!context.mounted) return 0;
 
     final List<AssetEntity>? picked;
     try {
       picked = await AssetPicker.pickAssets(
         context,
         pickerConfig: const AssetPickerConfig(
-          maxAssets: 1,
+          maxAssets: 50,
           requestType: RequestType.image,
         ),
       );
     } on StateError catch (error) {
       throw StateError('Could not open gallery permissions: ${error.message}');
     }
-    if (picked == null || picked.isEmpty) return;
+    if (picked == null || picked.isEmpty) return 0;
 
-    final asset = picked.first;
+    var uploadedCount = 0;
+    for (final asset in picked) {
+      await _uploadAsset(asset: asset, groupId: groupId, user: user);
+      uploadedCount += 1;
+    }
+
+    return uploadedCount;
+  }
+
+  Future<void> _uploadAsset({
+    required AssetEntity asset,
+    required String groupId,
+    required User user,
+  }) async {
     final file = await asset.file;
     if (file == null) {
       throw StateError('Could not open the selected image.');
@@ -140,6 +155,10 @@ class PhotoService {
       throw StateError('Only the uploader can delete this photo.');
     }
 
+    if (_deleteEndpoint.isNotEmpty) {
+      return _deleteWithBackend(user: user, post: post);
+    }
+
     var cloudinaryDeleted = false;
     final token = post.cloudinaryDeleteToken;
     if (token != null && token.isNotEmpty) {
@@ -147,6 +166,36 @@ class PhotoService {
     }
 
     await _firestore.collection('posts').doc(post.id).delete();
+    return DeletePhotoResult(cloudinaryDeleted: cloudinaryDeleted);
+  }
+
+  Future<DeletePhotoResult> _deleteWithBackend({
+    required User user,
+    required PhotoPost post,
+  }) async {
+    final token = await user.getIdToken();
+    final response = await _httpClient.post(
+      Uri.parse(_deleteEndpoint),
+      headers: {
+        HttpHeaders.authorizationHeader: 'Bearer $token',
+        HttpHeaders.contentTypeHeader: 'application/json',
+      },
+      body: jsonEncode({
+        'postId': post.id,
+        'cloudinaryPublicId': post.cloudinaryPublicId,
+      }),
+    );
+
+    final decoded = response.body.isEmpty ? null : jsonDecode(response.body);
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      final message = decoded is Map<String, dynamic>
+          ? decoded['error'] ?? 'Could not delete this photo.'
+          : 'Could not delete this photo.';
+      throw StateError(message.toString());
+    }
+
+    final cloudinaryDeleted =
+        decoded is Map<String, dynamic> && decoded['cloudinaryDeleted'] == true;
     return DeletePhotoResult(cloudinaryDeleted: cloudinaryDeleted);
   }
 

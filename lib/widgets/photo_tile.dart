@@ -3,19 +3,28 @@ import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 
 import '../models/photo_post.dart';
-import '../screens/photo_preview_screen.dart';
 
 class PhotoTile extends StatelessWidget {
   const PhotoTile({
     required this.post,
     required this.dateLabel,
     required this.displayDate,
+    required this.selectionMode,
+    required this.selected,
+    required this.canSelect,
+    required this.onTap,
+    required this.onLongPress,
     super.key,
   });
 
   final PhotoPost post;
   final String dateLabel;
   final DateTime displayDate;
+  final bool selectionMode;
+  final bool selected;
+  final bool canSelect;
+  final VoidCallback onTap;
+  final VoidCallback onLongPress;
 
   @override
   Widget build(BuildContext context) {
@@ -26,26 +35,60 @@ class PhotoTile extends StatelessWidget {
       child: Material(
         color: Theme.of(context).colorScheme.surface,
         child: InkWell(
-          onTap: () => _openPreview(context),
+          onTap: onTap,
+          onLongPress: onLongPress,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Expanded(
-                child: Hero(
-                  tag: post.id,
-                  child: CachedNetworkImage(
-                    imageUrl: post.imageUrl,
-                    fit: BoxFit.cover,
-                    placeholder: (context, url) => ColoredBox(
-                      color:
-                          Theme.of(context).colorScheme.surfaceContainerHighest,
-                      child: const Center(child: CircularProgressIndicator()),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Hero(
+                      tag: post.id,
+                      child: CachedNetworkImage(
+                        imageUrl: post.imageUrl,
+                        fit: BoxFit.cover,
+                        placeholder: (context, url) => ColoredBox(
+                          color: Theme.of(context)
+                              .colorScheme
+                              .surfaceContainerHighest,
+                          child:
+                              const Center(child: CircularProgressIndicator()),
+                        ),
+                        errorWidget: (context, url, error) => const ColoredBox(
+                          color: Color(0xFFE6E6E0),
+                          child: Icon(Icons.broken_image_outlined),
+                        ),
+                      ),
                     ),
-                    errorWidget: (context, url, error) => const ColoredBox(
-                      color: Color(0xFFE6E6E0),
-                      child: Icon(Icons.broken_image_outlined),
-                    ),
-                  ),
+                    if (selectionMode)
+                      Positioned.fill(
+                        child: ColoredBox(
+                          color: selected
+                              ? Colors.black.withValues(alpha: 0.28)
+                              : Colors.black.withValues(
+                                  alpha: canSelect ? 0.05 : 0.42,
+                                ),
+                        ),
+                      ),
+                    if (selectionMode)
+                      Positioned(
+                        top: 8,
+                        right: 8,
+                        child: Icon(
+                          selected
+                              ? Icons.check_circle
+                              : canSelect
+                                  ? Icons.radio_button_unchecked
+                                  : Icons.lock_outline,
+                          color: Colors.white,
+                          shadows: const [
+                            Shadow(blurRadius: 8, color: Colors.black54),
+                          ],
+                        ),
+                      ),
+                  ],
                 ),
               ),
               Padding(
@@ -72,14 +115,6 @@ class PhotoTile extends StatelessWidget {
             ],
           ),
         ),
-      ),
-    );
-  }
-
-  void _openPreview(BuildContext context) {
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => PhotoPreviewScreen(post: post),
       ),
     );
   }

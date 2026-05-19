@@ -13,6 +13,7 @@ class PhotoPost {
     required this.width,
     required this.height,
     required this.takenOn,
+    required this.cloudinaryPublicId,
     required this.cloudinaryDeleteToken,
   });
 
@@ -27,6 +28,7 @@ class PhotoPost {
   final int? width;
   final int? height;
   final DateTime? takenOn;
+  final String? cloudinaryPublicId;
   final String? cloudinaryDeleteToken;
 
   factory PhotoPost.fromSnapshot(
@@ -48,6 +50,7 @@ class PhotoPost {
       width: data['width'] as int?,
       height: data['height'] as int?,
       takenOn: takenOn?.toDate(),
+      cloudinaryPublicId: data['cloudinaryPublicId'] as String?,
       cloudinaryDeleteToken: data['cloudinaryDeleteToken'] as String?,
     );
   }

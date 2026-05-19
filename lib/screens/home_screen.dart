@@ -5,6 +5,7 @@ import '../models/photo_post.dart';
 import '../services/auth_service.dart';
 import '../services/photo_service.dart';
 import 'members_screen.dart';
+import 'photo_preview_screen.dart';
 import '../widgets/photo_tile.dart';
 
 enum PhotoSortField { uploadedAt, takenOn }
@@ -25,13 +26,25 @@ class _HomeScreenState extends State<HomeScreen> {
   final _photoService = PhotoService();
 
   bool _uploading = false;
+  bool _deletingSelection = false;
   PhotoSortField _sortField = PhotoSortField.uploadedAt;
   PhotoSortDirection _sortDirection = PhotoSortDirection.descending;
+  final Set<String> _selectedPostIds = {};
+  List<PhotoPost> _latestPosts = const [];
 
   Future<void> _uploadPhoto() async {
     setState(() => _uploading = true);
     try {
-      await _photoService.pickCompressAndUpload(context, widget.group.id);
+      final count =
+          await _photoService.pickCompressAndUpload(context, widget.group.id);
+      if (!mounted || count == 0) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            count == 1 ? 'Uploaded 1 photo.' : 'Uploaded $count photos.',
+          ),
+        ),
+      );
     } catch (error) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -40,6 +53,89 @@ class _HomeScreenState extends State<HomeScreen> {
     } finally {
       if (mounted) setState(() => _uploading = false);
     }
+  }
+
+  Future<void> _deleteSelected(List<PhotoPost> posts) async {
+    final selectedPosts = posts
+        .where((post) => _selectedPostIds.contains(post.id))
+        .where(_photoService.canCurrentUserDelete)
+        .toList(growable: false);
+    if (selectedPosts.isEmpty) return;
+
+    final shouldDelete = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(
+          selectedPosts.length == 1
+              ? 'Delete selected photo?'
+              : 'Delete ${selectedPosts.length} selected photos?',
+        ),
+        content: const Text('This removes them from the shared feed.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (shouldDelete != true) return;
+
+    setState(() => _deletingSelection = true);
+    var deletedCount = 0;
+    try {
+      for (final post in selectedPosts) {
+        await _photoService.deletePhoto(post);
+        deletedCount += 1;
+      }
+      if (!mounted) return;
+      setState(_selectedPostIds.clear);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            deletedCount == 1
+                ? 'Deleted 1 photo.'
+                : 'Deleted $deletedCount photos.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.toString())),
+      );
+    } finally {
+      if (mounted) setState(() => _deletingSelection = false);
+    }
+  }
+
+  void _toggleSelection(PhotoPost post) {
+    if (!_photoService.canCurrentUserDelete(post)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('You can only select your own photos.')),
+      );
+      return;
+    }
+
+    setState(() {
+      if (_selectedPostIds.contains(post.id)) {
+        _selectedPostIds.remove(post.id);
+      } else {
+        _selectedPostIds.add(post.id);
+      }
+    });
+  }
+
+  void _openPreview(PhotoPost post) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => PhotoPreviewScreen(post: post),
+      ),
+    );
   }
 
   List<PhotoPost> _sortPosts(List<PhotoPost> posts) {
@@ -70,37 +166,65 @@ class _HomeScreenState extends State<HomeScreen> {
     return _sortField == PhotoSortField.uploadedAt ? 'Uploaded' : 'Taken';
   }
 
+  bool get _selectionMode => _selectedPostIds.isNotEmpty;
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(widget.group.name),
-            Text(
-              'Invite code: ${widget.group.inviteCode}',
-              style: Theme.of(context).textTheme.bodySmall,
+        leading: _selectionMode
+            ? IconButton(
+                tooltip: 'Cancel selection',
+                onPressed: _deletingSelection
+                    ? null
+                    : () => setState(_selectedPostIds.clear),
+                icon: const Icon(Icons.close),
+              )
+            : null,
+        title: _selectionMode
+            ? Text('${_selectedPostIds.length} selected')
+            : Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(widget.group.name),
+                  Text(
+                    'Invite code: ${widget.group.inviteCode}',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ],
+              ),
+        actions: [
+          if (_selectionMode)
+            IconButton(
+              tooltip: 'Delete selected',
+              onPressed: _deletingSelection
+                  ? null
+                  : () => _deleteSelected(_latestPosts),
+              icon: _deletingSelection
+                  ? const SizedBox.square(
+                      dimension: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.delete_outline),
+            )
+          else ...[
+            IconButton(
+              tooltip: 'Members',
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (_) => MembersScreen(group: widget.group),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.group_outlined),
+            ),
+            IconButton(
+              tooltip: 'Sign out',
+              onPressed: _authService.signOut,
+              icon: const Icon(Icons.logout),
             ),
           ],
-        ),
-        actions: [
-          IconButton(
-            tooltip: 'Members',
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => MembersScreen(group: widget.group),
-                ),
-              );
-            },
-            icon: const Icon(Icons.group_outlined),
-          ),
-          IconButton(
-            tooltip: 'Sign out',
-            onPressed: _authService.signOut,
-            icon: const Icon(Icons.logout),
-          ),
         ],
       ),
       body: StreamBuilder<List<PhotoPost>>(
@@ -111,6 +235,7 @@ class _HomeScreenState extends State<HomeScreen> {
           }
 
           final posts = snapshot.data ?? const <PhotoPost>[];
+          _latestPosts = posts;
           if (posts.isEmpty) {
             return Center(
               child: Padding(
@@ -152,11 +277,27 @@ class _HomeScreenState extends State<HomeScreen> {
                       childAspectRatio: 0.76,
                     ),
                     itemCount: sortedPosts.length,
-                    itemBuilder: (context, index) => PhotoTile(
-                      post: sortedPosts[index],
-                      dateLabel: _dateLabel,
-                      displayDate: _sortDate(sortedPosts[index]),
-                    ),
+                    itemBuilder: (context, index) {
+                      final post = sortedPosts[index];
+                      final canSelect =
+                          _photoService.canCurrentUserDelete(post);
+                      return PhotoTile(
+                        post: post,
+                        dateLabel: _dateLabel,
+                        displayDate: _sortDate(post),
+                        selectionMode: _selectionMode,
+                        selected: _selectedPostIds.contains(post.id),
+                        canSelect: canSelect,
+                        onTap: () {
+                          if (_selectionMode) {
+                            _toggleSelection(post);
+                          } else {
+                            _openPreview(post);
+                          }
+                        },
+                        onLongPress: () => _toggleSelection(post),
+                      );
+                    },
                   ),
                 ),
               ],

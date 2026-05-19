@@ -21,3 +21,7 @@ ios/Runner.xcworkspace/
 
 *.iml
 *.log
+
+cloudflare/worker/.dev.vars
+cloudflare/worker/wrangler.toml
+cloudflare/worker/node_modules/

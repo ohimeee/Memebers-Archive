@@ -1,0 +1,10 @@
+name = "memebers-archive-delete"
+main = "src/index.js"
+compatibility_date = "2026-05-20"
+
+# Store these with `wrangler secret put`, not in this file:
+# FIREBASE_PROJECT_ID
+# FIREBASE_WEB_API_KEY
+# CLOUDINARY_CLOUD_NAME
+# CLOUDINARY_API_KEY
+# CLOUDINARY_API_SECRET
